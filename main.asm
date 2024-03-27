@@ -14,8 +14,18 @@ SOCK_STREAM equ 1
 INADOR_ANY equ 0
 CONN_LEN equ 5
 
+STDIN equ 0
 STDOUT equ 1
 STDERR equ 2
+
+macro read fd, buffer, count
+{
+    mov rax, sys_read
+    mov rdi, fd
+    mov rsi, buffer
+    mov rdx, count
+    syscall
+}
 
 macro write fd, buffer, count
 {
@@ -83,39 +93,63 @@ segment readable executable
 entry main
 
 main:
+    write STDOUT, socket_info, socket_info_len
     socket AF_INET, SOCK_STREAM, 0
-    test rax, rax
+    cmp rax, 0
     jl .err
     mov qword [sockfd], rax
-    write STDOUT, sock_ok, sock_ok_len
 
     mov word	[servaddr.sin_family], AF_INET
     mov word	[servaddr.sin_port], 36895 ;; port: 8080
     mov dword   [servaddr.sin_addr], INADOR_ANY
 
-    bind [sockfd], servaddr, sizeof_sockaddr_in
-    test rax, rax
+    write STDOUT, bind_info, bind_info_len
+    bind [sockfd], servaddr, sizeof_servaddr
+    cmp rax, 0
     jl .err
-    write STDOUT, bind_ok, bind_ok_len
 
+    write STDOUT, listen_info, listen_info_len
     listen [sockfd], CONN_LEN
-    test rax, rax
+    cmp rax, 0
     jl .err
-    write STDOUT, listening_msg, listening_msg_len
 
+    write STDOUT, waiting_info, waiting_info_len
     accept [sockfd], cliaddr, sizeof_cliaddr
+    mov qword [connfd], rax
 
-    close rax
+    write qword [connfd], conn_stab, conn_stab_len 
+.loop:
+    ; let client write
+    write qword [connfd], msg_wr, msg_wr_len
+    read qword [connfd], msg, 10
+
+    ; let server know
+    write STDOUT, msg, 10
+
+    ; let server write
+    write STDOUT, msg_wr, msg_wr_len
+    read STDIN, msg, 10
+
+    ; let client know
+    write qword [connfd], msg, 10
+
+    jmp .loop
+
+    write STDOUT, ok, ok_len
+    close [connfd]
     close [sockfd]
     exit 0
 
 .err:
-    write STDERR, err_msg, err_msg_len
+    write STDOUT, err_msg,err_msg_len 
+    close [connfd]
+    close [sockfd]
     exit 0
 
 segment readable writable
-sockfd dq 0
-connfd dq 0
+sockfd dq -1
+connfd dq -1
+
 struc sockaddr_in
 {
     .sin_family dw 0
@@ -124,23 +158,35 @@ struc sockaddr_in
     .sin_zero dq 0
 }
 servaddr sockaddr_in
-sizeof_sockaddr_in = $ - servaddr
+sizeof_servaddr = $ - servaddr.sin_family
 
 cliaddr sockaddr_in
-sizeof_cliaddr = $ - cliaddr
+sizeof_cliaddr dd sizeof_servaddr
 
-;; err msg
-err_msg db "ERROR", 10
+; msg
+
+msg db 0
+
+socket_info db "[INFO]: Creating socket.", 10
+socket_info_len = $ - socket_info
+
+bind_info db "[INFO]: Binding socket.", 10
+bind_info_len = $ - bind_info
+
+listen_info db "[INFO]: Server is listening.", 10
+listen_info_len = $ - listen_info
+
+waiting_info db "[INFO]: Server is waiting.", 10
+waiting_info_len = $ - waiting_info
+
+ok db "[INFO]: OK!", 10
+ok_len = $ - ok
+
+err_msg db "[INFO]: ERROR!", 10
 err_msg_len = $ - err_msg
 
-;; ok sock msg
-sock_ok db "socket created, ok.", 10
-sock_ok_len = $ - sock_ok
+conn_stab db "[INFO]: Connection has been established.", 10
+conn_stab_len = $ - conn_stab
 
-;; ok bind msg
-bind_ok db "socket binded, ok.", 10
-bind_ok_len = $ - bind_ok
-
-; ok listen msg
-listening_msg db "server listening...", 10
-listening_msg_len = $ - listening_msg
+msg_wr db "MSG ==> "
+msg_wr_len = $ - msg_wr
